@@ -1,64 +1,86 @@
-from collections.abc import Callable
+from __future__ import annotations
 
 import pytest
-from closures import make_file_simulator, make_logger
+from closures import make_file_simulator
 from decorators import retries
 
 
-def test_retries_immediate_success() -> None:
-    calls = 0
+def test_retries_succeeds_on_third_attempt_without_sleep() -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
 
-    @retries(max_attempts=3)
-    def ok_fn(x: int) -> int:
-        nonlocal calls
-        calls += 1
-        return x * 2
+    @retries(attempts=3, delay=0.5, backoff=2.0, sleep=slept.append)
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("boom")
+        return "ok"
 
-    assert ok_fn(5) == 10
-    assert calls == 1
+    assert flaky() == "ok"
+    assert calls["n"] == 3
+    assert slept == [0.5, 1.0]
 
 
-def test_retries_with_simulated_file(
-    sleep_recorder: tuple[Callable[[float], None], Callable[[], list[float]]],
-) -> None:
-    fake_sleep, get_sleeps = sleep_recorder
-    log_fn, get_logs, _ = make_logger()
+def test_retries_reraises_after_last_attempt() -> None:
+    logs: list[str] = []
 
-    sim_read, get_attempts = make_file_simulator(fail_attempts=2, content="data")
+    @retries(attempts=2, sleep=lambda _: None, logger=logs.append)
+    def always_fails() -> None:
+        raise ValueError("nope")
+
+    with pytest.raises(ValueError):
+        always_fails()
+    assert any("fail after 2 attempts" in m for m in logs)
+
+
+def test_retries_only_for_listed_exceptions() -> None:
+    calls = {"n": 0}
+
+    @retries(attempts=5, exceptions=(TimeoutError,), sleep=lambda _: None)
+    def wrong_kind() -> None:
+        calls["n"] += 1
+        raise KeyError("not retried")
+
+    with pytest.raises(KeyError):
+        wrong_kind()
+    assert calls["n"] == 1
+
+
+def test_retries_jitter_is_deterministic_with_injected_rand() -> None:
+    slept: list[float] = []
+    calls = {"n": 0}
+
+    @retries(attempts=2, delay=1.0, jitter=0.5, sleep=slept.append, rand=lambda: 0.5)
+    def once_fails() -> int:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError
+        return 1
+
+    assert once_fails() == 1
+    assert slept == [1.25]
+
+
+def test_retries_invalid_attempts() -> None:
+    with pytest.raises(ValueError):
+        retries(attempts=0)
+
+
+def test_retries_with_file_simulator() -> None:
+    read_fn, attempts_fn = make_file_simulator(fail_attempts=2, content="file data")
+    slept: list[float] = []
 
     @retries(
-        max_attempts=3,
+        attempts=3,
+        exceptions=(OSError,),
         delay=0.1,
         backoff=2.0,
-        exceptions=(OSError,),
-        sleep_fn=fake_sleep,
-        logger=log_fn,
+        sleep=slept.append,
     )
-    def fetch() -> str:
-        return sim_read("a.txt")
+    def safe_read(p: str) -> str:
+        return read_fn(p)
 
-    assert fetch() == "data"
-    assert get_attempts() == 3
-    assert get_sleeps() == [0.1, 0.2]
-    assert len(get_logs()) == 2
-
-
-def test_retries_exhausted() -> None:
-    sim_read, get_attempts = make_file_simulator(fail_attempts=5, content="data")
-
-    @retries(max_attempts=2, exceptions=(OSError,))
-    def fetch() -> str:
-        return sim_read("a.txt")
-
-    with pytest.raises(OSError):
-        fetch()
-    assert get_attempts() == 2
-
-
-def test_preserves_metadata() -> None:
-    def original_fn(x: int) -> int:
-        return x + 1
-
-    wrapped = retries(max_attempts=3)(original_fn)
-    assert wrapped.__name__ == "original_fn"
-    assert wrapped.__wrapped__ is original_fn
+    res = safe_read("/path/doc.txt")
+    assert res == "file data"
+    assert attempts_fn() == 3
+    assert len(slept) == 2

@@ -1,23 +1,45 @@
-from collections.abc import Callable
+from __future__ import annotations
 
+import pytest
 from decorators import timed
 
 
-def test_timed_decorator(
-    fake_clock: tuple[Callable[[], float], Callable[[float], None]],
-) -> None:
-    clock, advance = fake_clock
-    records: list[tuple[str, float]] = []
+def test_timed_uses_clock_and_logger() -> None:
+    ticks = iter([0.0, 0.012345])
+    logs: list[str] = []
 
-    def sink(name: str, duration: float) -> None:
-        records.append((name, duration))
+    @timed("work", unit="ms", logger=logs.append, clock=lambda: next(ticks))
+    def work(x: int) -> int:
+        return x * x
 
-    @timed(sink=sink, clock_fn=clock)
-    def task() -> str:
-        advance(0.25)
-        return "done"
+    assert work(5) == 25
+    assert logs == ["[timed] work took 12.345 ms"]
 
-    res = task()
-    assert res == "done"
-    assert len(records) == 1
-    assert records[0] == ("task", 0.25)
+
+def test_timed_logs_even_on_exception() -> None:
+    ticks = iter([1.0, 3.0])
+    logs: list[str] = []
+
+    @timed(unit="s", logger=logs.append, clock=lambda: next(ticks))
+    def boom() -> None:
+        raise RuntimeError("x")
+
+    with pytest.raises(RuntimeError):
+        boom()
+    assert logs == ["[timed] boom took 2.000 s"]
+
+
+def test_timed_preserves_metadata() -> None:
+    def original(a: int) -> int:
+        return a
+
+    wrapped = timed(logger=lambda _: None, clock=lambda: 0.0)(original)
+    assert wrapped.__name__ == "original"
+    assert wrapped.__wrapped__ is original  # type: ignore[attr-defined]
+
+
+def test_timed_units() -> None:
+    logs: list[str] = []
+    ticks = iter([0.0, 2.0])
+    timed(unit="us", logger=logs.append, clock=lambda: next(ticks))(lambda: None)()
+    assert logs[0].endswith("2000000.000 us")

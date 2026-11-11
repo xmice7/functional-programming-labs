@@ -1,20 +1,40 @@
 from __future__ import annotations
 
+import functools
+import random
+import threading
+import time
 from collections.abc import Callable
-from functools import wraps
-from typing import Any, ParamSpec, Protocol, TypeVar, cast
+from typing import Any, Literal, ParamSpec, Protocol, TypeVar, cast
 
 P = ParamSpec("P")
 R = TypeVar("R")
 R_co = TypeVar("R_co", covariant=True)
 
+Key = tuple[tuple[Any, ...], tuple[tuple[str, Any], ...]]
 
-class WrappedFn(Protocol[P, R_co]):
+
+class Decorator(Protocol):
+    def __call__(self, func: Callable[P, R], /) -> Callable[P, R]: ...
+
+
+class CachedFn(Protocol[P, R_co]):
     __name__: str
     __doc__: str | None
-    __wrapped__: Callable[..., Any]
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
+
+    def cache_clear(self) -> None: ...
+
+    def cache_invalidate(
+        self, predicate: Callable[[tuple[Any, ...], dict[str, Any]], bool]
+    ) -> int: ...
+
+    def cache_size(self) -> int: ...
+
+
+class CacheDecorator(Protocol):
+    def __call__(self, func: Callable[P, R], /) -> CachedFn[P, R]: ...
 
 
 class StatsRecord:
@@ -35,131 +55,150 @@ class StatsFn(Protocol[P, R_co]):
     stats: StatsRecord
     __name__: str
     __doc__: str | None
-    __wrapped__: Callable[..., Any]
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
-
-
-class CachedFn(Protocol[P, R_co]):
-    __name__: str
-    __doc__: str | None
-    __wrapped__: Callable[..., Any]
-
-    def invalidate(self) -> None: ...
-
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
-
-
-def retries(
-    max_attempts: int = 3,
-    delay: float = 0.1,
-    backoff: float = 2.0,
-    exceptions: tuple[type[BaseException], ...] = (Exception,),
-    sleep_fn: Callable[[float], None] | None = None,
-    logger: Callable[[str], None] | None = None,
-) -> Callable[[Callable[P, R]], WrappedFn[P, R]]:
-    if max_attempts < 1:
-        raise ValueError("max_attempts must be >= 1")
-
-    def decorator(fn: Callable[P, R]) -> WrappedFn[P, R]:
-        @wraps(fn)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            current_delay = delay
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return fn(*args, **kwargs)
-                except exceptions as err:
-                    if logger:
-                        logger(f"Attempt {attempt}/{max_attempts} failed: {err}")
-                    if attempt == max_attempts:
-                        raise
-                    if sleep_fn:
-                        sleep_fn(current_delay)
-                    current_delay *= backoff
-            raise RuntimeError("Unreachable")
-
-        return cast(WrappedFn[P, R], wrapper)
-
-    return decorator
-
-
-def call_stats(
-    clock_fn: Callable[[], float] | None = None,
-) -> Callable[[Callable[P, R]], StatsFn[P, R]]:
-    get_time = clock_fn if clock_fn is not None else (lambda: 0.0)
-
-    def decorator(fn: Callable[P, R]) -> StatsFn[P, R]:
-        stats_obj = StatsRecord()
-
-        @wraps(fn)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            stats_obj.total_calls += 1
-            t_start = get_time()
-            try:
-                result = fn(*args, **kwargs)
-                stats_obj.successes += 1
-                return result
-            except BaseException:
-                stats_obj.failures += 1
-                raise
-            finally:
-                t_end = get_time()
-                stats_obj.total_duration += max(0.0, t_end - t_start)
-
-        cast(Any, wrapper).stats = stats_obj
-        return cast(StatsFn[P, R], wrapper)
-
-    return decorator
 
 
 def timed(
-    sink: Callable[[str, float], None] | None = None,
-    clock_fn: Callable[[], float] | None = None,
-) -> Callable[[Callable[P, R]], WrappedFn[P, R]]:
-    get_time = clock_fn if clock_fn is not None else (lambda: 0.0)
+    label: str | None = None,
+    *,
+    unit: Literal["s", "ms", "us"] = "ms",
+    logger: Callable[[str], None] = print,
+    clock: Callable[[], float] = time.perf_counter,
+) -> Decorator:
+    factor = {"s": 1.0, "ms": 1e3, "us": 1e6}[unit]
 
-    def decorator(fn: Callable[P, R]) -> WrappedFn[P, R]:
-        @wraps(fn)
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        name = label or func.__name__
+
+        @functools.wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            t0 = get_time()
+            t0 = clock()
             try:
-                return fn(*args, **kwargs)
+                return func(*args, **kwargs)
             finally:
-                elapsed = max(0.0, get_time() - t0)
-                if sink:
-                    sink(fn.__name__, elapsed)
+                logger(f"[timed] {name} took {(clock() - t0) * factor:.3f} {unit}")
 
-        return cast(WrappedFn[P, R], wrapper)
+        return wrapper
 
     return decorator
 
 
-def cached_with_ttl(
-    ttl: float = 60.0,
-    clock_fn: Callable[[], float] | None = None,
-) -> Callable[[Callable[P, R]], CachedFn[P, R]]:
-    get_time = clock_fn if clock_fn is not None else (lambda: 0.0)
+def retries(
+    attempts: int = 3,
+    exceptions: tuple[type[BaseException], ...] = (Exception,),
+    delay: float = 0.0,
+    backoff: float = 1.0,
+    jitter: float = 0.0,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    logger: Callable[[str], None] = lambda _: None,
+    rand: Callable[[], float] = random.random,
+) -> Decorator:
+    if attempts < 1:
+        raise ValueError("attempts must be >= 1")
 
-    def decorator(fn: Callable[P, R]) -> CachedFn[P, R]:
-        cache: dict[tuple[Any, ...], tuple[R, float]] = {}
-
-        @wraps(fn)
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            key = (args, tuple(sorted(kwargs.items())))
-            now = get_time()
-            if key in cache:
-                val, ts = cache[key]
-                if now - ts <= ttl:
-                    return val
+            for i in range(1, attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    if i == attempts:
+                        logger(f"[retries] fail after {i} attempts: {e!r}")
+                        raise
+                    wait = delay * backoff ** (i - 1) + (
+                        rand() * jitter if jitter else 0.0
+                    )
+                    logger(f"[retries] attempt {i} failed: {e!r}; sleeping {wait:.3f}s")
+                    sleep(wait)
+            raise AssertionError("unreachable")
 
-            val = fn(*args, **kwargs)
-            cache[key] = (val, now)
-            return val
+        return wrapper
 
-        def invalidate() -> None:
-            cache.clear()
+    return decorator
 
-        cast(Any, wrapper).invalidate = invalidate
+
+def make_key(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Key:
+    return (args, tuple(sorted(kwargs.items())))
+
+
+def cached(
+    *,
+    ttl: float | None = None,
+    time_fn: Callable[[], float] = time.time,
+) -> CacheDecorator:
+    def decorator(func: Callable[P, R]) -> CachedFn[P, R]:
+        cache: dict[Key, tuple[float | None, R]] = {}
+        lock = threading.Lock()
+
+        @functools.wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            key = make_key(args, kwargs)
+            now = time_fn()
+            with lock:
+                if key in cache:
+                    expiry, value = cache[key]
+                    if expiry is None or now < expiry:
+                        return value
+                    del cache[key]
+            value = func(*args, **kwargs)
+            with lock:
+                cache[key] = (None if ttl is None else now + ttl, value)
+            return value
+
+        def cache_clear() -> None:
+            with lock:
+                cache.clear()
+
+        def cache_invalidate(
+            predicate: Callable[[tuple[Any, ...], dict[str, Any]], bool],
+        ) -> int:
+            with lock:
+                doomed = [k for k in cache if predicate(k[0], dict(k[1]))]
+                for k in doomed:
+                    del cache[k]
+            return len(doomed)
+
+        def cache_size() -> int:
+            with lock:
+                return len(cache)
+
+        wrapper_any: Any = wrapper
+        wrapper_any.cache_clear = cache_clear
+        wrapper_any.cache_invalidate = cache_invalidate
+        wrapper_any.cache_size = cache_size
         return cast(CachedFn[P, R], wrapper)
+
+    return decorator
+
+
+cached_with_ttl = cached
+
+
+def call_stats(
+    clock: Callable[[], float] = time.perf_counter,
+) -> Callable[[Callable[P, R]], StatsFn[P, R]]:
+    def decorator(func: Callable[P, R]) -> StatsFn[P, R]:
+        stats_record = StatsRecord()
+
+        @functools.wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            stats_record.total_calls += 1
+            t0 = clock()
+            try:
+                res = func(*args, **kwargs)
+                stats_record.successes += 1
+                return res
+            except Exception:
+                stats_record.failures += 1
+                raise
+            finally:
+                stats_record.total_duration += max(0.0, clock() - t0)
+
+        wrapper_any: Any = wrapper
+        wrapper_any.stats = stats_record
+        return cast(StatsFn[P, R], wrapper)
 
     return decorator

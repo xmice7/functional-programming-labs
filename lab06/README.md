@@ -1,10 +1,17 @@
 # Лабораторна робота №6. Замикання та декоратори як HOF
 
 **Варіант 6 — Повторні спроби файлової операції.**
-Замикання: closure-логер (`make_logger`), замикання стану лічильника (`make_call_counter`), симулятор збоїв файлової системи (`make_file_simulator`).
-Декоратори: `@retries` (експоненціальний backoff, підміна sleep та logger), `@call_stats`, `@timed`, `@cached_with_ttl`.
-Збереження метаданих через `functools.wraps`, сувора типізація `ParamSpec` та `TypeVar`.
+Замикання: `make_counter` (стан через nonlocal), `make_logger` (з інжектованим sink), симулятор збоїв файлової системи `make_file_simulator`, реєстри токенів.
+Декоратори: `@retries` (експоненційний backoff, jitter, підміна sleep та logger), `@timed` (інжектовані clock/logger), `@cached` (TTL-кеш із `cache_clear` та `cache_invalidate`), `@call_stats` (збір статистики викликів).
+Збереження метаданих через `functools.wraps`, повна типізація `ParamSpec` та `TypeVar`.
 Виконав: Корж Олексій, група ФЕП-23.
+
+## Структура файлів
+
+- `closures.py`: реалізація замикань зі збереженням стану (`make_counter`, `make_logger`, `make_file_simulator`, `make_token_registry`, `make_revocable_registry`)
+- `decorators.py`: параметризовані декоратори `@timed`, `@retries`, `@cached`, `@call_stats`
+- `app.py`: демонстраційний сценарій імітації нестабільного читання файлу з повторними спробами та статистикою
+- `tests/`: набір тестів pytest та Hypothesis (`test_closures.py`, `test_timed.py`, `test_retries.py`, `test_cached.py`, `test_stats.py`)
 
 ## Як запускати
 

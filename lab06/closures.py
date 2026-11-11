@@ -1,47 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 
-def make_logger() -> tuple[
-    Callable[[str], None],
-    Callable[[], list[str]],
-    Callable[[], None],
-]:
-    logs: list[str] = []
+def make_counter(start: int = 0) -> Callable[[], int]:
+    value = start
 
-    def log(msg: str) -> None:
-        logs.append(msg)
+    def inc() -> int:
+        nonlocal value
+        value += 1
+        return value
 
-    def get_logs() -> list[str]:
-        return list(logs)
-
-    def clear() -> None:
-        logs.clear()
-
-    return log, get_logs, clear
+    return inc
 
 
-def make_call_counter() -> tuple[
-    Callable[[], int],
-    Callable[[], int],
-    Callable[[], None],
-]:
-    count = 0
-
-    def increment() -> int:
-        nonlocal count
-        count += 1
-        return count
-
-    def get_count() -> int:
-        return count
-
-    def reset() -> None:
-        nonlocal count
-        count = 0
-
-    return increment, get_count, reset
+def make_logger(
+    prefix: str = "INFO",
+    sink: Callable[[str], None] | None = None,
+) -> Callable[[str], None]:
+    target_sink = sink if sink is not None else print
+    return lambda msg: target_sink(f"[{prefix}] {msg}")
 
 
 def make_file_simulator(
@@ -62,3 +40,22 @@ def make_file_simulator(
         return attempts
 
     return read_file, get_attempts
+
+
+def make_token_registry(tokens: Iterable[str]) -> Callable[[str], bool]:
+    allowed = frozenset(t.strip() for t in tokens if t.strip())
+    return lambda token: token in allowed
+
+
+def make_revocable_registry(
+    tokens: Iterable[str],
+) -> tuple[Callable[[str], bool], Callable[[str], None]]:
+    allowed = set(tokens)
+
+    def verify(token: str) -> bool:
+        return token in allowed
+
+    def revoke(token: str) -> None:
+        allowed.discard(token)
+
+    return verify, revoke

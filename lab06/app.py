@@ -1,61 +1,51 @@
 from __future__ import annotations
 
-from closures import make_file_simulator, make_logger
-from decorators import call_stats, retries, timed
+from closures import make_counter, make_file_simulator, make_logger
+from decorators import cached, call_stats, retries, timed
+
+log = make_logger("app", print)
+ticks = make_counter()
+
+
+def fake_clock() -> float:
+    return ticks() * 0.001
+
+
+def fake_sleep(s: float) -> None:
+    log(f"(sleep {s:.3f}s skipped)")
+
+
+sim_read, sim_attempts = make_file_simulator(
+    fail_attempts=2,
+    content="Config payload line 1\nConfig payload line 2\n",
+    error_msg="Simulated disk read timeout",
+)
+
+
+@call_stats(clock=fake_clock)
+@timed("read_config_file", logger=log, clock=fake_clock)
+@retries(attempts=4, delay=0.05, backoff=2.0, sleep=fake_sleep, logger=log)
+def read_config_file(filepath: str) -> str:
+    return sim_read(filepath)
+
+
+@cached(ttl=30.0, time_fn=fake_clock)
+def parse_config_metrics(raw_data: str) -> dict[str, int]:
+    return {"lines": len(raw_data.splitlines()), "chars": len(raw_data)}
 
 
 def main() -> None:
-    logger, get_logs, _ = make_logger()
+    print("Reading file with retries:")
+    content = read_config_file("/etc/app/config.json")
+    print("Content read successfully:\n", content)
+    print("Simulated attempts:", sim_attempts())
+    print("Stats total calls:", read_config_file.stats.total_calls)
+    print("Stats successes:", read_config_file.stats.successes)
+    print("Stats failures:", read_config_file.stats.failures)
 
-    simulated_reader, get_attempts = make_file_simulator(
-        fail_attempts=2,
-        content='{"status": "success", "payload": "data_chunk_42"}',
-    )
-
-    logged_times: list[tuple[str, float]] = []
-
-    def sink(fn_name: str, elapsed: float) -> None:
-        logged_times.append((fn_name, elapsed))
-
-    clock = 100.0
-
-    def fake_clock() -> float:
-        nonlocal clock
-        clock += 0.05
-        return clock
-
-    sleeps: list[float] = []
-
-    def fake_sleep(d: float) -> None:
-        sleeps.append(d)
-
-    @call_stats(clock_fn=fake_clock)
-    @timed(sink=sink, clock_fn=fake_clock)
-    @retries(
-        max_attempts=4,
-        delay=0.1,
-        backoff=2.0,
-        exceptions=(OSError,),
-        sleep_fn=fake_sleep,
-        logger=logger,
-    )
-    def fetch_file(path: str) -> str:
-        return simulated_reader(path)
-
-    print("Запуск операції читання файлу...")
-    result = fetch_file("/var/data/input.json")
-    print("Результат читання:", result)
-    print("Всього спроб файлового симулятора:", get_attempts())
-    print("Зафіксовані затримки (sleep):", sleeps)
-    print("Логи замикання-логера:")
-    for log_msg in get_logs():
-        print("  -", log_msg)
-
-    stats = fetch_file.stats
-    print(
-        f"\nСтатистика викликів: {stats.total_calls} всього, "
-        f"{stats.successes} успіхів, {stats.failures} помилок"
-    )
+    metrics = parse_config_metrics(content)
+    print("Metrics:", metrics)
+    print("Cache size:", parse_config_metrics.cache_size())
 
 
 if __name__ == "__main__":
