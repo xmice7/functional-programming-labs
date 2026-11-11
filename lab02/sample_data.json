@@ -1,0 +1,12 @@
+[
+  {"id": 1, "title": "The Hobbit", "genre": "Fantasy", "ratings": [4.8, 4.9, 5.0, 4.7]},
+  {"id": 2, "title": "Dune", "genre": "Sci-Fi", "ratings": [4.5, 4.7, 4.8, 4.6]},
+  {"id": 3, "title": "Clean Code", "genre": "Tech", "ratings": [4.2, 3.8, 4.0, 4.4]},
+  {"id": 4, "title": "1984", "genre": "Classics", "ratings": [4.9, 4.8, 4.7, 4.9]},
+  {"id": 5, "title": "Neuromancer", "genre": "Sci-Fi", "ratings": [3.9, 4.1, 4.0, 3.8]},
+  {"id": 6, "title": "The Fellowship of the Ring", "genre": "Fantasy", "ratings": [5.0, 4.9, 5.0, 4.8]},
+  {"id": 7, "title": "Structure and Interpretation of Computer Programs", "genre": "Tech", "ratings": [4.9, 5.0, 4.8, 4.9]},
+  {"id": 8, "title": "Brave New World", "genre": "Classics", "ratings": [3.5, 3.8, 3.6, 3.7]},
+  {"id": 9, "title": "Foundation", "genre": "Sci-Fi", "ratings": [4.3, 4.4, 4.5, 4.2]},
+  {"id": 10, "title": "Harry Potter and the Sorcerer's Stone", "genre": "Fantasy", "ratings": [4.7, 4.8, 4.6, 4.9]}
+]

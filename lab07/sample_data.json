@@ -1,0 +1,9 @@
+[
+  {"id": 1, "customer": "Іван Коваль", "total": 1250.0, "status": "paid", "city": "Львів"},
+  {"id": 2, "customer": "Марія Шевченко", "total": 450.0, "status": "pending", "city": "Київ"},
+  {"id": 3, "customer": "Олег Бондар", "total": 2800.0, "status": "paid", "city": "Львів"},
+  {"id": 4, "customer": "Оксана Ткач", "total": 1250.0, "status": "paid", "city": "Одеса"},
+  {"id": 5, "customer": "Андрій Лисенко", "total": 920.0, "status": "cancelled", "city": "Дніпро"},
+  {"id": 6, "customer": "Наталія Мороз", "total": 3100.0, "status": "paid", "city": "Київ"},
+  {"id": 7, "customer": "Сергій Кравчук", "total": 600.0, "status": "paid", "city": "Харків"}
+]
